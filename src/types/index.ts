@@ -43,6 +43,16 @@ export interface ProcessingParameters {
   threshold: number;
   eigenvalueRatio: number;
   isoValue: number;
+  preprocessSigma: number;
+  multiScaleSigmaMin: number;
+  multiScaleSigmaMax: number;
+  multiScaleSigmaStep: number;
+  plateLikeThreshold: number;
+  minFractureArea: number;
+  minConnectedVoxels: number;
+  useNonMaximumSuppression: boolean;
+  suppressRadius: number;
+  structureSaliencyThreshold: number;
 }
 
 export interface Point3D {

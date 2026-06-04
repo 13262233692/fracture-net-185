@@ -23,7 +23,17 @@ export class AppUI {
     sigma: 1.5,
     threshold: 0.01,
     eigenvalueRatio: 0.5,
-    isoValue: 0.3
+    isoValue: 0.3,
+    preprocessSigma: 0.5,
+    multiScaleSigmaMin: 1.0,
+    multiScaleSigmaMax: 2.5,
+    multiScaleSigmaStep: 0.5,
+    plateLikeThreshold: 0.1,
+    minFractureArea: 10,
+    minConnectedVoxels: 20,
+    useNonMaximumSuppression: true,
+    suppressRadius: 1,
+    structureSaliencyThreshold: 0.01
   };
 
   private processingStatus: HTMLElement;
@@ -161,13 +171,28 @@ export class AppUI {
   private createProcessingSection(): void {
     const section = this.createSection('裂隙增强参数');
 
-    const sigmaSlider = this.createSlider(
-      'sigma', 'Sigma (σ)', 0.5, 5, this.processingParams.sigma, 0.1,
-      (value) => { this.processingParams.sigma = value; }
+    const preprocessSigmaSlider = this.createSlider(
+      'preprocessSigma', '预处理降噪σ', 0, 2.0, this.processingParams.preprocessSigma, 0.1,
+      (value) => { this.processingParams.preprocessSigma = value; }
+    );
+
+    const sigmaMinSlider = this.createSlider(
+      'sigmaMin', '最小检测尺度', 0.5, 3.0, this.processingParams.multiScaleSigmaMin, 0.1,
+      (value) => { this.processingParams.multiScaleSigmaMin = value; }
+    );
+
+    const sigmaMaxSlider = this.createSlider(
+      'sigmaMax', '最大检测尺度', 1.0, 5.0, this.processingParams.multiScaleSigmaMax, 0.1,
+      (value) => { this.processingParams.multiScaleSigmaMax = value; }
+    );
+
+    const sigmaStepSlider = this.createSlider(
+      'sigmaStep', '尺度步长', 0.25, 1.0, this.processingParams.multiScaleSigmaStep, 0.25,
+      (value) => { this.processingParams.multiScaleSigmaStep = value; }
     );
 
     const thresholdSlider = this.createSlider(
-      'threshold', '阈值', 0.001, 0.1, this.processingParams.threshold, 0.001,
+      'threshold', '特征值阈值', 0.001, 0.1, this.processingParams.threshold, 0.001,
       (value) => { this.processingParams.threshold = value; }
     );
 
@@ -176,8 +201,27 @@ export class AppUI {
       (value) => { this.processingParams.eigenvalueRatio = value; }
     );
 
+    const plateLikeSlider = this.createSlider(
+      'plateLikeThreshold', '板状结构阈值', 0.05, 0.3, this.processingParams.plateLikeThreshold, 0.01,
+      (value) => { this.processingParams.plateLikeThreshold = value; }
+    );
+
+    const saliencySlider = this.createSlider(
+      'saliencyThreshold', '结构显著性', 0, 0.1, this.processingParams.structureSaliencyThreshold, 0.005,
+      (value) => { this.processingParams.structureSaliencyThreshold = value; }
+    );
+
+    const minVoxelsSlider = this.createSlider(
+      'minConnectedVoxels', '最小连通体素', 5, 100, this.processingParams.minConnectedVoxels, 5,
+      (value) => { this.processingParams.minConnectedVoxels = Math.round(value); }
+    );
+
+    const nmsCheck = this.createCheckbox('启用非极大值抑制', this.processingParams.useNonMaximumSuppression,
+      (checked) => { this.processingParams.useNonMaximumSuppression = checked; }
+    );
+
     const isoSlider = this.createSlider(
-      'isoValue', '等值面值', 0.1, 0.8, this.processingParams.isoValue, 0.05,
+      'isoValue', '裂隙提取阈值', 0.1, 0.8, this.processingParams.isoValue, 0.05,
       (value) => { this.processingParams.isoValue = value; }
     );
 
@@ -215,9 +259,16 @@ export class AppUI {
     progressFill.style.transition = 'width 0.3s ease';
     this.progressBar.appendChild(progressFill);
 
-    section.appendChild(sigmaSlider);
+    section.appendChild(preprocessSigmaSlider);
+    section.appendChild(sigmaMinSlider);
+    section.appendChild(sigmaMaxSlider);
+    section.appendChild(sigmaStepSlider);
     section.appendChild(thresholdSlider);
     section.appendChild(ratioSlider);
+    section.appendChild(plateLikeSlider);
+    section.appendChild(saliencySlider);
+    section.appendChild(minVoxelsSlider);
+    section.appendChild(nmsCheck);
     section.appendChild(isoSlider);
     section.appendChild(processBtn);
     section.appendChild(this.processingStatus);
@@ -511,54 +562,57 @@ export class AppUI {
       return;
     }
 
-    this.showProcessing('正在计算Hessian矩阵...');
-    this.setProgress(20);
+    this.showProcessing('正在预处理降噪...');
+    this.setProgress(15);
 
     setTimeout(() => {
-      this.setProgress(40);
-      this.showProcessing('正在计算特征值...');
+      this.setProgress(30);
+      this.showProcessing('正在多尺度Hessian分析...');
 
       setTimeout(() => {
-        this.setProgress(60);
-        this.showProcessing('正在增强裂隙响应...');
-
-        const result = this.hessianFilter.enhanceFractures(this.volumeData!, this.processingParams);
-
-        this.setProgress(80);
-        this.showProcessing('正在提取岩体表面...');
-
-        const mcVolume = new MarchingCubes(this.volumeData!, 100);
-        const volumeMesh = mcVolume.extractSurface();
-        this.volumeRenderer.createVolumeMesh(volumeMesh);
-
-        this.setProgress(90);
-        this.showProcessing('正在计算裂隙法线...');
-
-        const hessian = this.hessianFilter.computeHessian(
-          this.volumeData!.scalarData as Float32Array,
-          this.volumeData!.dimensions,
-          this.processingParams.sigma
-        );
-
-        const { normals, fractureMask } = this.hessianFilter.computeFractureNormals(
-          this.volumeData!,
-          result.eigenvalues,
-          hessian
-        );
-
-        this.setProgress(100);
-        this.showProcessing('裂隙增强完成!');
+        this.setProgress(50);
+        this.showProcessing('正在计算特征值与响应...');
 
         setTimeout(() => {
-          this.hideProcessing();
-        }, 1000);
+          this.setProgress(70);
+          this.showProcessing('正在连通域过滤与NMS...');
 
-        (window as any).processingResult = result;
-        (window as any).fractureNormals = normals;
-        (window as any).fractureMask = fractureMask;
+          const result = this.hessianFilter.enhanceFractures(this.volumeData!, this.processingParams);
 
-      }, 300);
-    }, 300);
+          this.setProgress(85);
+          this.showProcessing('正在提取岩体表面...');
+
+          const mcVolume = new MarchingCubes(this.volumeData!, 100);
+          const volumeMesh = mcVolume.extractSurface();
+          this.volumeRenderer.createVolumeMesh(volumeMesh);
+
+          this.setProgress(95);
+          this.showProcessing('正在计算裂隙法线...');
+
+          const { normals, fractureMask } = this.hessianFilter.computeFractureNormals(
+            this.volumeData!,
+            result.eigenvalues,
+            result.hessian,
+            this.processingParams
+          );
+
+          const componentCount = result.componentSizes.size;
+          const filteredCount = Array.from(result.componentSizes.values()).filter(s => s >= this.processingParams.minConnectedVoxels).length;
+
+          this.setProgress(100);
+          this.showProcessing(`完成! 检测到 ${componentCount} 个区域, 保留 ${filteredCount} 个有效裂隙`);
+
+          setTimeout(() => {
+            this.hideProcessing();
+          }, 2000);
+
+          (window as any).processingResult = result;
+          (window as any).fractureNormals = normals;
+          (window as any).fractureMask = fractureMask;
+
+        }, 200);
+      }, 200);
+    }, 200);
   }
 
   private async extractFractureMesh(): Promise<void> {
