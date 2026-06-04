@@ -83,3 +83,67 @@ export interface FracturePlane {
   dip: number;
   dipDirection: number;
 }
+
+export interface GraphNode {
+  id: number;
+  position: Point3D;
+  voxelIndex: number;
+  connectedNodes: number[];
+  normal?: Point3D;
+  aperture?: number;
+  componentId?: number;
+}
+
+export interface GraphEdge {
+  id: string;
+  from: number;
+  to: number;
+  weight: number;
+  distance: number;
+  aperture?: number;
+}
+
+export interface FractureGraph {
+  nodes: Map<number, GraphNode>;
+  edges: Map<string, GraphEdge>;
+  nodeCount: number;
+  edgeCount: number;
+}
+
+export interface ConnectedComponent {
+  id: number;
+  nodeIds: number[];
+  size: number;
+  boundingBox: {
+    min: Point3D;
+    max: Point3D;
+  };
+  isPercolating?: boolean;
+}
+
+export interface FlowPath {
+  nodeIds: number[];
+  positions: Point3D[];
+  totalLength: number;
+  minAperture: number;
+  avgAperture: number;
+  tortuosity: number;
+}
+
+export interface PercolationResult {
+  hasPercolatingPath: boolean;
+  paths: FlowPath[];
+  shortestPath?: FlowPath;
+  widestPath?: FlowPath;
+  connectivity: number;
+  percolationThreshold?: number;
+}
+
+export interface FlowProperties {
+  porosity: number;
+  permeability: number;
+  connectivity: number;
+  clusterCount: number;
+  largestClusterSize: number;
+  percolationProbability: number;
+}

@@ -1,9 +1,10 @@
-import { VolumeData, FractureStatistics, ProcessingParameters } from '../types';
+import { VolumeData, FractureStatistics, ProcessingParameters, FlowProperties, PercolationResult } from '../types';
 import { VolumeLoader } from '../loaders/VolumeLoader';
 import { HessianFilter } from '../processing/HessianFilter';
 import { MarchingCubes } from '../processing/MarchingCubes';
 import { VolumeRenderer } from '../rendering/VolumeRenderer';
 import { FractureAnalyzer } from '../analysis/FractureAnalyzer';
+import { FractureNetworkAnalyzer } from '../analysis/FractureNetworkAnalyzer';
 
 export class AppUI {
   private container: HTMLElement;
@@ -19,6 +20,13 @@ export class AppUI {
 
   private volumeData: VolumeData | null = null;
   private fractureStats: FractureStatistics | null = null;
+  private networkAnalyzer: FractureNetworkAnalyzer | null = null;
+  private flowProperties: FlowProperties | null = null;
+  private percolationResult: PercolationResult | null = null;
+
+  private inletBoundary: 'minX' | 'maxX' | 'minY' | 'maxY' | 'minZ' | 'maxZ' = 'minX';
+  private outletBoundary: 'minX' | 'maxX' | 'minY' | 'maxY' | 'minZ' | 'maxZ' = 'maxX';
+
   private processingParams: ProcessingParameters = {
     sigma: 1.5,
     threshold: 0.01,
@@ -112,6 +120,7 @@ export class AppUI {
     this.createProcessingSection();
     this.createRenderingSection();
     this.createAnalysisSection();
+    this.createPercolationSection();
     this.createViewControls();
   }
 
@@ -364,6 +373,367 @@ export class AppUI {
     section.appendChild(showRoseBtn);
     section.appendChild(exportBtn);
     this.sidebar.appendChild(section);
+  }
+
+  private createPercolationSection(): void {
+    const section = this.createSection('渗流分析');
+
+    const inletLabel = document.createElement('div');
+    inletLabel.textContent = '入口边界:';
+    inletLabel.style.fontSize = '12px';
+    inletLabel.style.marginBottom = '5px';
+    inletLabel.style.color = '#aaa';
+
+    const inletSelect = this.createBoundarySelect('inlet', this.inletBoundary, (value) => {
+      this.inletBoundary = value as 'minX' | 'maxX' | 'minY' | 'maxY' | 'minZ' | 'maxZ';
+    });
+
+    const outletLabel = document.createElement('div');
+    outletLabel.textContent = '出口边界:';
+    outletLabel.style.fontSize = '12px';
+    outletLabel.style.marginBottom = '5px';
+    outletLabel.style.marginTop = '10px';
+    outletLabel.style.color = '#aaa';
+
+    const outletSelect = this.createBoundarySelect('outlet', this.outletBoundary, (value) => {
+      this.outletBoundary = value as 'minX' | 'maxX' | 'minY' | 'maxY' | 'minZ' | 'maxZ';
+    });
+
+    const buildGraphBtn = document.createElement('button');
+    buildGraphBtn.textContent = '构建裂隙网络图';
+    buildGraphBtn.style.width = '100%';
+    buildGraphBtn.style.padding = '10px';
+    buildGraphBtn.style.backgroundColor = '#0f3460';
+    buildGraphBtn.style.color = '#fff';
+    buildGraphBtn.style.border = '1px solid #4a9eff';
+    buildGraphBtn.style.borderRadius = '4px';
+    buildGraphBtn.style.cursor = 'pointer';
+    buildGraphBtn.style.marginTop = '10px';
+    buildGraphBtn.onclick = () => this.buildFractureNetwork();
+
+    const findPathsBtn = document.createElement('button');
+    findPathsBtn.textContent = '搜索渗流路径';
+    findPathsBtn.style.width = '100%';
+    findPathsBtn.style.padding = '10px';
+    findPathsBtn.style.backgroundColor = '#0f3460';
+    findPathsBtn.style.color = '#fff';
+    findPathsBtn.style.border = '1px solid #e94560';
+    findPathsBtn.style.borderRadius = '4px';
+    findPathsBtn.style.cursor = 'pointer';
+    findPathsBtn.style.marginTop = '10px';
+    findPathsBtn.onclick = () => this.findPercolationPaths();
+
+    const calcPropsBtn = document.createElement('button');
+    calcPropsBtn.textContent = '计算渗流特性';
+    calcPropsBtn.style.width = '100%';
+    calcPropsBtn.style.padding = '10px';
+    calcPropsBtn.style.backgroundColor = '#0f3460';
+    calcPropsBtn.style.color = '#fff';
+    calcPropsBtn.style.border = '1px solid #4a9eff';
+    calcPropsBtn.style.borderRadius = '4px';
+    calcPropsBtn.style.cursor = 'pointer';
+    calcPropsBtn.style.marginTop = '10px';
+    calcPropsBtn.onclick = () => this.calculateFlowProperties();
+
+    const showNetworkCheck = this.createCheckbox('显示网络图', false,
+      (checked) => { this.volumeRenderer.setNetworkVisible(checked); }
+    );
+
+    const showPathsCheck = this.createCheckbox('显示渗流路径', true,
+      (checked) => { this.volumeRenderer.setFlowPathsVisible(checked); }
+    );
+
+    const showBoundariesCheck = this.createCheckbox('显示边界标记', true,
+      (checked) => { this.volumeRenderer.setBoundaryMarkersVisible(checked); }
+    );
+
+    const clearNetworkBtn = document.createElement('button');
+    clearNetworkBtn.textContent = '清除网络可视化';
+    clearNetworkBtn.style.width = '100%';
+    clearNetworkBtn.style.padding = '8px';
+    clearNetworkBtn.style.backgroundColor = '#1a1a2e';
+    clearNetworkBtn.style.color = '#aaa';
+    clearNetworkBtn.style.border = '1px solid #333';
+    clearNetworkBtn.style.borderRadius = '4px';
+    clearNetworkBtn.style.cursor = 'pointer';
+    clearNetworkBtn.style.marginTop = '10px';
+    clearNetworkBtn.style.fontSize = '12px';
+    clearNetworkBtn.onclick = () => {
+      this.volumeRenderer.clearAllNetworkVisualization();
+    };
+
+    section.appendChild(inletLabel);
+    section.appendChild(inletSelect);
+    section.appendChild(outletLabel);
+    section.appendChild(outletSelect);
+    section.appendChild(buildGraphBtn);
+    section.appendChild(findPathsBtn);
+    section.appendChild(calcPropsBtn);
+    section.appendChild(showNetworkCheck);
+    section.appendChild(showPathsCheck);
+    section.appendChild(showBoundariesCheck);
+    section.appendChild(clearNetworkBtn);
+    this.sidebar.appendChild(section);
+  }
+
+  private createBoundarySelect(
+    id: string,
+    defaultValue: string,
+    onChange: (value: string) => void
+  ): HTMLSelectElement {
+    const select = document.createElement('select');
+    select.id = id;
+    select.style.width = '100%';
+    select.style.padding = '8px';
+    select.style.backgroundColor = '#0f3460';
+    select.style.color = '#fff';
+    select.style.border = '1px solid #4a9eff';
+    select.style.borderRadius = '4px';
+    select.style.cursor = 'pointer';
+
+    const options = [
+      { value: 'minX', label: 'X- 最小面' },
+      { value: 'maxX', label: 'X+ 最大面' },
+      { value: 'minY', label: 'Y- 最小面' },
+      { value: 'maxY', label: 'Y+ 最大面' },
+      { value: 'minZ', label: 'Z- 最小面' },
+      { value: 'maxZ', label: 'Z+ 最大面' }
+    ];
+
+    options.forEach(opt => {
+      const option = document.createElement('option');
+      option.value = opt.value;
+      option.textContent = opt.label;
+      if (opt.value === defaultValue) {
+        option.selected = true;
+      }
+      select.appendChild(option);
+    });
+
+    select.onchange = (e) => {
+      onChange((e.target as HTMLSelectElement).value);
+    };
+
+    return select;
+  }
+
+  private async buildFractureNetwork(): Promise<void> {
+    const fractureMask = (window as any).fractureMask;
+    const fractureNormals = (window as any).fractureNormals;
+    const processingResult = (window as any).processingResult;
+
+    if (!this.volumeData || !fractureMask) {
+      alert('请先执行裂隙增强');
+      return;
+    }
+
+    this.showProcessing('正在构建裂隙网络图...');
+    this.setProgress(30);
+
+    setTimeout(() => {
+      this.networkAnalyzer = new FractureNetworkAnalyzer(
+        this.volumeData!,
+        fractureMask,
+        fractureNormals,
+        processingResult?.responseVolume
+      );
+
+      this.setProgress(60);
+      this.showProcessing('正在计算连通分量...');
+
+      setTimeout(() => {
+        const graph = this.networkAnalyzer!.buildGraph(6);
+        const components = this.networkAnalyzer!.findConnectedComponents();
+
+        this.setProgress(90);
+        this.showProcessing('正在可视化网络图...');
+
+        const nodePositions = this.networkAnalyzer!.getNodePositions();
+        const edgePositions = this.networkAnalyzer!.getEdgePositions();
+
+        this.volumeRenderer.createNetworkVisualization(nodePositions, edgePositions);
+        this.volumeRenderer.createBoundaryMarkers(this.inletBoundary, this.outletBoundary);
+
+        this.setProgress(100);
+        this.showProcessing(`网络构建完成! ${graph.nodeCount} 节点, ${graph.edgeCount} 边, ${components.length} 连通分量`);
+
+        (window as any).networkAnalyzer = this.networkAnalyzer;
+
+        setTimeout(() => { this.hideProcessing(); }, 2000);
+      }, 300);
+    }, 300);
+  }
+
+  private async findPercolationPaths(): Promise<void> {
+    if (!this.networkAnalyzer) {
+      alert('请先构建裂隙网络图');
+      return;
+    }
+
+    this.showProcessing('正在搜索渗流路径...');
+    this.setProgress(30);
+
+    setTimeout(() => {
+      this.setProgress(60);
+      this.volumeRenderer.createBoundaryMarkers(this.inletBoundary, this.outletBoundary);
+
+      this.percolationResult = this.networkAnalyzer!.findPathsBetweenBoundaries(
+        this.inletBoundary,
+        this.outletBoundary,
+        5
+      );
+
+      this.setProgress(90);
+      this.showProcessing('正在可视化渗流路径...');
+
+      if (this.percolationResult.hasPercolatingPath && this.percolationResult.paths.length > 0) {
+        this.volumeRenderer.createFlowPathVisualization(this.percolationResult.paths, true);
+        this.updatePercolationPanel();
+        this.setProgress(100);
+        this.showProcessing(`找到 ${this.percolationResult.paths.length} 条渗流路径! 最短路径: ${this.percolationResult.shortestPath?.totalLength.toFixed(2)}`);
+      } else {
+        this.setProgress(100);
+        this.showProcessing('未找到连通的渗流路径', true);
+      }
+
+      (window as any).percolationResult = this.percolationResult;
+
+      setTimeout(() => { this.hideProcessing(); }, 2000);
+    }, 300);
+  }
+
+  private async calculateFlowProperties(): Promise<void> {
+    if (!this.networkAnalyzer) {
+      alert('请先构建裂隙网络图');
+      return;
+    }
+
+    this.showProcessing('正在计算渗流特性...');
+    this.setProgress(40);
+
+    setTimeout(() => {
+      this.flowProperties = this.networkAnalyzer!.calculateFlowProperties();
+
+      this.setProgress(100);
+      this.updateFlowPropertiesPanel();
+      this.showProcessing('渗流特性计算完成!');
+
+      (window as any).flowProperties = this.flowProperties;
+
+      setTimeout(() => { this.hideProcessing(); }, 1500);
+    }, 300);
+  }
+
+  private updatePercolationPanel(): void {
+    if (!this.percolationResult) return;
+
+    let panel = document.getElementById('percolation-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'percolation-panel';
+      panel.style.position = 'absolute';
+      panel.style.bottom = '20px';
+      panel.style.left = '20px';
+      panel.style.backgroundColor = 'rgba(22, 33, 62, 0.95)';
+      panel.style.color = '#fff';
+      panel.style.padding = '15px';
+      panel.style.borderRadius = '8px';
+      panel.style.minWidth = '280px';
+      panel.style.maxHeight = '400px';
+      panel.style.overflowY = 'auto';
+      panel.style.fontSize = '12px';
+      this.renderContainer.appendChild(panel);
+    }
+
+    const pathsHtml = this.percolationResult.paths.slice(0, 3).map((path, idx) => `
+      <div style="margin-bottom: 8px; padding: 8px; background: rgba(74, 158, 255, 0.1); border-radius: 4px;">
+        <div style="color: ${idx === 0 ? '#e94560' : '#4a9eff'}; font-weight: bold;">路径 ${idx + 1}${idx === 0 ? ' (最短)' : ''}</div>
+        <div>路径长度: ${path.totalLength.toFixed(2)}</div>
+        <div>弯曲度: ${path.tortuosity.toFixed(3)}</div>
+        <div>最小开度: ${path.minAperture.toFixed(3)}</div>
+        <div>节点数: ${path.nodeIds.length}</div>
+      </div>
+    `).join('');
+
+    panel.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <h4 style="margin: 0; color: #e94560;">渗流路径分析</h4>
+        <button onclick="this.parentElement.parentElement.style.display='none'" style="background: none; border: none; color: #aaa; cursor: pointer; font-size: 16px;">×</button>
+      </div>
+      <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #333;">
+        <div style="display: flex; justify-content: space-between;">
+          <span>渗流状态:</span>
+          <span style="color: ${this.percolationResult.hasPercolatingPath ? '#4ade80' : '#e94560'}; font-weight: bold;">
+            ${this.percolationResult.hasPercolatingPath ? '存在连通路径 ✓' : '无连通路径 ✗'}
+          </span>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+          <span>连通性系数:</span>
+          <span>${this.percolationResult.connectivity.toFixed(3)}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+          <span>找到路径数:</span>
+          <span>${this.percolationResult.paths.length}</span>
+        </div>
+      </div>
+      <div style="font-size: 11px; color: #888; margin-bottom: 8px;">主要路径详情:</div>
+      ${pathsHtml}
+    `;
+  }
+
+  private updateFlowPropertiesPanel(): void {
+    if (!this.flowProperties) return;
+
+    let panel = document.getElementById('flow-props-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'flow-props-panel';
+      panel.style.position = 'absolute';
+      panel.style.top = '20px';
+      panel.style.left = '20px';
+      panel.style.backgroundColor = 'rgba(22, 33, 62, 0.95)';
+      panel.style.color = '#fff';
+      panel.style.padding = '15px';
+      panel.style.borderRadius = '8px';
+      panel.style.minWidth = '280px';
+      panel.style.fontSize = '12px';
+      this.renderContainer.appendChild(panel);
+    }
+
+    panel.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <h4 style="margin: 0; color: #4a9eff;">渗流特性分析</h4>
+        <button onclick="this.parentElement.parentElement.style.display='none'" style="background: none; border: none; color: #aaa; cursor: pointer; font-size: 16px;">×</button>
+      </div>
+      <div style="line-height: 1.8;">
+        <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+          <span>孔隙度 (φ):</span>
+          <span style="color: #4ade80; font-weight: bold;">${(this.flowProperties.porosity * 100).toFixed(3)}%</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+          <span>渗透率 (k):</span>
+          <span style="color: #4a9eff; font-weight: bold;">${this.flowProperties.permeability.toExponential(3)} m²</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+          <span>连通性系数:</span>
+          <span>${this.flowProperties.connectivity.toFixed(3)}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+          <span>簇数量:</span>
+          <span>${this.flowProperties.clusterCount}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 4px 0;">
+          <span>最大簇大小:</span>
+          <span>${this.flowProperties.largestClusterSize} 节点</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 4px 0; border-top: 1px solid #333; margin-top: 8px; padding-top: 8px;">
+          <span>渗流概率:</span>
+          <span style="color: ${this.flowProperties.percolationProbability > 0.5 ? '#4ade80' : '#e94560'}; font-weight: bold;">
+            ${(this.flowProperties.percolationProbability * 100).toFixed(1)}%
+          </span>
+        </div>
+      </div>
+    `;
   }
 
   private createViewControls(): void {

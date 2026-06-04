@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { VolumeData, MeshData } from '../types';
+import { VolumeData, MeshData, FlowPath } from '../types';
 
 export class VolumeRenderer {
   private container: HTMLElement;
@@ -11,6 +11,10 @@ export class VolumeRenderer {
   private volumeMesh: THREE.Mesh | null = null;
   private fractureMesh: THREE.Mesh | null = null;
   private wireframeBox: THREE.LineSegments | null = null;
+  private networkNodes: THREE.Points | null = null;
+  private networkEdges: THREE.LineSegments | null = null;
+  private flowPathMeshes: THREE.Group | null = null;
+  private boundaryMarkers: THREE.Group | null = null;
   private animationId: number | null = null;
   private volumeData: VolumeData | null = null;
 
@@ -340,12 +344,288 @@ export class VolumeRenderer {
     return this.controls;
   }
 
+  createNetworkVisualization(
+    nodePositions: Float32Array,
+    edgePositions: Float32Array,
+    showNodes: boolean = true,
+    showEdges: boolean = true
+  ): void {
+    this.clearNetwork();
+
+    if (showEdges && edgePositions.length > 0) {
+      const edgeGeometry = new THREE.BufferGeometry();
+      edgeGeometry.setAttribute('position', new THREE.BufferAttribute(edgePositions, 3));
+      
+      const edgeMaterial = new THREE.LineBasicMaterial({
+        color: 0x00ff88,
+        transparent: true,
+        opacity: 0.6,
+        linewidth: 1
+      });
+
+      this.networkEdges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+      this.scene.add(this.networkEdges);
+    }
+
+    if (showNodes && nodePositions.length > 0) {
+      const nodeGeometry = new THREE.BufferGeometry();
+      nodeGeometry.setAttribute('position', new THREE.BufferAttribute(nodePositions, 3));
+      
+      const nodeMaterial = new THREE.PointsMaterial({
+        color: 0xffff00,
+        size: 2,
+        transparent: true,
+        opacity: 0.8,
+        sizeAttenuation: true
+      });
+
+      this.networkNodes = new THREE.Points(nodeGeometry, nodeMaterial);
+      this.scene.add(this.networkNodes);
+    }
+  }
+
+  createFlowPathVisualization(
+    paths: FlowPath[],
+    highlightShortest: boolean = true
+  ): void {
+    this.clearFlowPaths();
+
+    if (paths.length === 0) return;
+
+    this.flowPathMeshes = new THREE.Group();
+
+    const pathColors = [
+      0xff4444,
+      0x44ff44,
+      0x4444ff,
+      0xffff44,
+      0xff44ff
+    ];
+
+    paths.forEach((path, index) => {
+      if (path.positions.length < 2) return;
+
+      const color = highlightShortest && index === 0 ? 0xff0000 : pathColors[index % pathColors.length];
+      const tubeRadius = highlightShortest && index === 0 ? 1.5 : 1;
+
+      const points: THREE.Vector3[] = [];
+      for (let i = 0; i < path.positions.length; i++) {
+        points.push(new THREE.Vector3(
+          path.positions[i].x,
+          path.positions[i].y,
+          path.positions[i].z
+        ));
+      }
+
+      const curve = new THREE.CatmullRomCurve3(points);
+      const tubeGeometry = new THREE.TubeGeometry(curve, path.positions.length * 2, tubeRadius, 8, false);
+      
+      const tubeMaterial = new THREE.MeshPhongMaterial({
+        color: color,
+        transparent: true,
+        opacity: highlightShortest && index === 0 ? 0.9 : 0.6,
+        emissive: color,
+        emissiveIntensity: 0.3
+      });
+
+      const tube = new THREE.Mesh(tubeGeometry, tubeMaterial);
+      tube.userData.pathIndex = index;
+      tube.userData.pathInfo = path;
+      this.flowPathMeshes!.add(tube);
+
+      const startSphere = new THREE.Mesh(
+        new THREE.SphereGeometry(tubeRadius * 2, 16, 16),
+        new THREE.MeshPhongMaterial({ color: 0x00ff00, emissive: 0x00ff00, emissiveIntensity: 0.5 })
+      );
+      startSphere.position.copy(points[0]);
+      this.flowPathMeshes!.add(startSphere);
+
+      const endSphere = new THREE.Mesh(
+        new THREE.SphereGeometry(tubeRadius * 2, 16, 16),
+        new THREE.MeshPhongMaterial({ color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 0.5 })
+      );
+      endSphere.position.copy(points[points.length - 1]);
+      this.flowPathMeshes!.add(endSphere);
+    });
+
+    this.scene.add(this.flowPathMeshes);
+  }
+
+  createBoundaryMarkers(
+    inletBoundary: 'minX' | 'maxX' | 'minY' | 'maxY' | 'minZ' | 'maxZ',
+    outletBoundary: 'minX' | 'maxX' | 'minY' | 'maxY' | 'minZ' | 'maxZ'
+  ): void {
+    this.clearBoundaryMarkers();
+
+    if (!this.volumeData) return;
+
+    this.boundaryMarkers = new THREE.Group();
+
+    const { dimensions, spacing, origin } = this.volumeData;
+    const width = dimensions.x * spacing.x;
+    const height = dimensions.y * spacing.y;
+    const depth = dimensions.z * spacing.z;
+
+    const createFaceMarker = (
+      boundary: 'minX' | 'maxX' | 'minY' | 'maxY' | 'minZ' | 'maxZ',
+      color: number,
+      isInlet: boolean
+    ) => {
+      let geometry: THREE.PlaneGeometry;
+      let position: THREE.Vector3;
+      let rotation: THREE.Euler;
+
+      switch (boundary) {
+        case 'minX':
+          geometry = new THREE.PlaneGeometry(height, depth);
+          position = new THREE.Vector3(origin.x, origin.y + height / 2, origin.z + depth / 2);
+          rotation = new THREE.Euler(0, -Math.PI / 2, 0);
+          break;
+        case 'maxX':
+          geometry = new THREE.PlaneGeometry(height, depth);
+          position = new THREE.Vector3(origin.x + width, origin.y + height / 2, origin.z + depth / 2);
+          rotation = new THREE.Euler(0, Math.PI / 2, 0);
+          break;
+        case 'minY':
+          geometry = new THREE.PlaneGeometry(width, depth);
+          position = new THREE.Vector3(origin.x + width / 2, origin.y, origin.z + depth / 2);
+          rotation = new THREE.Euler(Math.PI / 2, 0, 0);
+          break;
+        case 'maxY':
+          geometry = new THREE.PlaneGeometry(width, depth);
+          position = new THREE.Vector3(origin.x + width / 2, origin.y + height, origin.z + depth / 2);
+          rotation = new THREE.Euler(-Math.PI / 2, 0, 0);
+          break;
+        case 'minZ':
+          geometry = new THREE.PlaneGeometry(width, height);
+          position = new THREE.Vector3(origin.x + width / 2, origin.y + height / 2, origin.z);
+          rotation = new THREE.Euler(0, 0, 0);
+          break;
+        case 'maxZ':
+        default:
+          geometry = new THREE.PlaneGeometry(width, height);
+          position = new THREE.Vector3(origin.x + width / 2, origin.y + height / 2, origin.z + depth);
+          rotation = new THREE.Euler(0, Math.PI, 0);
+          break;
+      }
+
+      const material = new THREE.MeshBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.3,
+        side: THREE.DoubleSide
+      });
+
+      const marker = new THREE.Mesh(geometry, material);
+      marker.position.copy(position);
+      marker.rotation.copy(rotation);
+      this.boundaryMarkers!.add(marker);
+
+      const label = document.createElement('div');
+      label.textContent = isInlet ? '入口' : '出口';
+      label.style.cssText = `
+        position: absolute;
+        background: ${isInlet ? '#00ff00' : '#ff0000'};
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        pointer-events: none;
+        transform: translate(-50%, -50%);
+      `;
+      marker.userData.label = label;
+    };
+
+    createFaceMarker(inletBoundary, 0x00ff00, true);
+    createFaceMarker(outletBoundary, 0xff0000, false);
+
+    this.scene.add(this.boundaryMarkers);
+  }
+
+  setNetworkVisible(visible: boolean): void {
+    if (this.networkNodes) {
+      this.networkNodes.visible = visible;
+    }
+    if (this.networkEdges) {
+      this.networkEdges.visible = visible;
+    }
+  }
+
+  setFlowPathsVisible(visible: boolean): void {
+    if (this.flowPathMeshes) {
+      this.flowPathMeshes.visible = visible;
+    }
+  }
+
+  setBoundaryMarkersVisible(visible: boolean): void {
+    if (this.boundaryMarkers) {
+      this.boundaryMarkers.visible = visible;
+    }
+  }
+
+  clearNetwork(): void {
+    if (this.networkNodes) {
+      this.scene.remove(this.networkNodes);
+      this.networkNodes.geometry.dispose();
+      (this.networkNodes.material as THREE.Material).dispose();
+      this.networkNodes = null;
+    }
+    if (this.networkEdges) {
+      this.scene.remove(this.networkEdges);
+      this.networkEdges.geometry.dispose();
+      (this.networkEdges.material as THREE.Material).dispose();
+      this.networkEdges = null;
+    }
+  }
+
+  clearFlowPaths(): void {
+    if (this.flowPathMeshes) {
+      this.scene.remove(this.flowPathMeshes);
+      this.flowPathMeshes.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => m.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      });
+      this.flowPathMeshes = null;
+    }
+  }
+
+  clearBoundaryMarkers(): void {
+    if (this.boundaryMarkers) {
+      this.scene.remove(this.boundaryMarkers);
+      this.boundaryMarkers.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => m.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      });
+      this.boundaryMarkers = null;
+    }
+  }
+
+  clearAllNetworkVisualization(): void {
+    this.clearNetwork();
+    this.clearFlowPaths();
+    this.clearBoundaryMarkers();
+  }
+
   dispose(): void {
     if (this.animationId) {
       cancelAnimationFrame(this.animationId);
     }
     window.removeEventListener('resize', this.onWindowResize.bind(this));
     this.clearAll();
+    this.clearAllNetworkVisualization();
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
   }
